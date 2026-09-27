@@ -110,6 +110,24 @@ class TestSyntheticGLID(unittest.TestCase):
         self.assertEqual(batch_imgs.shape, (2, 3, 512, 512))
         self.assertEqual(batch_masks.shape, (2, 1, 512, 512))
 
+    def test_duplicate_and_hidden_files_excluded(self):
+        # Create duplicate and hidden files in temporary split
+        (self.img_dir / "sample_0001 (1).png").touch()
+        (self.lbl_dir / "sample_0001 (1).png").touch()
+        (self.img_dir / "1031 (1).png").touch()
+        (self.lbl_dir / "1031 (1).png").touch()
+        (self.img_dir / "._sample_0002.png").touch()
+        (self.lbl_dir / "._sample_0002.png").touch()
+        (self.img_dir / "extra_metadata.txt").touch()
+
+        # Loader should only discover the 4 valid sample pairs
+        ds = GLIDDataset(split_dir=str(self.split_dir), is_train=False)
+        self.assertEqual(len(ds), self.num_samples)
+        self.assertNotIn("sample_0001 (1).png", ds.image_files)
+        self.assertNotIn("1031 (1).png", ds.image_files)
+        self.assertNotIn("._sample_0002.png", ds.image_files)
+        self.assertNotIn("extra_metadata.txt", ds.image_files)
+
 
 if __name__ == "__main__":
     unittest.main()

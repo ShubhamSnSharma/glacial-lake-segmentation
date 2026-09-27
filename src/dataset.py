@@ -23,6 +23,7 @@ References:
 
 import os
 import random
+import re
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
@@ -238,9 +239,27 @@ class GLIDDataset(Dataset):
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _collect_png_files(directory: Path) -> List[str]:
-        """Return sorted list of PNG filenames (base names only)."""
-        files = [f.name for f in directory.iterdir() if f.suffix.lower() == ".png"]
+    def _is_valid_png(f: Path) -> bool:
+        """
+        Check whether a file is a valid dataset PNG file.
+        Filters out:
+          - Non-PNG files
+          - Hidden / AppleDouble files (starting with '.')
+          - Duplicate copy files created during extraction/upload (e.g. '1031 (1).png')
+        """
+        if f.name.startswith("."):
+            return False
+        if f.suffix.lower() != ".png":
+            return False
+        # Exclude duplicate pattern "<number> (1).png" or "<name> (N).png"
+        if re.search(r"\(\d+\)$", f.stem.strip()):
+            return False
+        return True
+
+    @classmethod
+    def _collect_png_files(cls, directory: Path) -> List[str]:
+        """Return sorted list of valid PNG filenames (base names only)."""
+        files = [f.name for f in directory.iterdir() if cls._is_valid_png(f)]
         # Sort numerically by stem (1.png, 2.png, ... 1000.png) if stems are ints
         try:
             files.sort(key=lambda x: int(Path(x).stem))
