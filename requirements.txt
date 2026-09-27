@@ -1,0 +1,27 @@
+# Core deep learning
+torch>=2.0.0
+torchvision>=0.15.0
+
+# Numerical and data processing
+numpy>=1.23.0
+pandas>=2.0.0
+Pillow>=9.0.0
+
+# Configuration
+PyYAML>=6.0
+
+# Plotting and visualization
+matplotlib>=3.6.0
+
+# Progress bars & utilities
+tqdm>=4.64.0
+
+# Evaluation metrics
+scikit-learn>=1.1.0
+
+# Streamlit UI (Interactive Demo)
+streamlit>=1.28.0
+
+# Jupyter environment (Colab / local exploration)
+ipykernel>=6.0.0
+notebook>=6.5.0

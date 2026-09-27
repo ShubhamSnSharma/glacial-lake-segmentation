@@ -1,0 +1,83 @@
+# =============================================================================
+# Git Ignore Configuration for Glacial Lake Segmentation
+# =============================================================================
+
+# Dataset & Large Binary Archives (Must NOT be committed)
+data/raw/
+data/processed/
+*.rar
+*.zip
+*.7z
+*.tar
+*.tar.gz
+*.tif
+*.tiff
+
+# Model Checkpoints & Weights
+checkpoints/
+*.pth
+*.pt
+*.ckpt
+*.onnx
+*.engine
+
+# Outputs & Generated Experiment Artifacts
+results/
+outputs/
+logs/
+wandb/
+runs/
+
+# Python Virtual Environments
+.venv/
+venv/
+env/
+ENV/
+.env/
+
+# Python Bytecode & Cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+.Python
+*.so
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Packaging & Distribution
+dist/
+build/
+*.egg-info/
+.eggs/
+
+# Jupyter Notebook Checkpoints
+.ipynb_checkpoints/
+*/.ipynb_checkpoints/*
+
+# macOS System Files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+.AppleDouble
+.LSOverride
+
+# Environment Variables & Secrets
+.env
+.env.*
+*.pem
+*.key
+*.cert
+credentials.json
+service_account.json
+
+# IDE & Editor Configuration
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
