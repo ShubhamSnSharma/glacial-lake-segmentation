@@ -5,6 +5,8 @@ Unit and integration tests for ResNet34FCN baseline, DeepLabV3Plus advanced mode
 loss functions, and evaluation metrics.
 """
 
+import os
+import tempfile
 import unittest
 import torch
 import torch.nn as nn
@@ -188,5 +190,160 @@ class TestMetrics(unittest.TestCase):
         self.assertAlmostEqual(summary["loss"], 0.15, places=4)
 
 
+class TestTrainerCheckpointResume(unittest.TestCase):
+    """Test suite for checkpoint saving, atomic writes, and resume capability."""
+
+    def setUp(self):
+        import tempfile
+        from torch.utils.data import TensorDataset, DataLoader
+        from src.trainer import Trainer
+
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.out_root = self.temp_dir.name
+
+        self.cfg = {
+            "training": {
+                "epochs": 4,
+                "learning_rate": 1e-3,
+                "weight_decay": 1e-4,
+                "scheduler": "cosine",
+                "warmup_epochs": 1,
+                "loss": "bce_dice",
+                "dice_weight": 0.5,
+                "bce_weight": 0.5,
+            },
+            "evaluation": {"threshold": 0.5},
+            "output": {
+                "checkpoint_dir": f"{self.out_root}/checkpoints",
+                "results_dir": f"{self.out_root}/results",
+                "plots_dir": f"{self.out_root}/results/plots",
+                "logs_dir": f"{self.out_root}/results/logs",
+                "predictions_dir": f"{self.out_root}/results/predictions",
+                "best_metric": "f1",
+            },
+            "data": {
+                "batch_size": 2,
+                "normalize_mean": [0.485, 0.456, 0.406],
+                "normalize_std": [0.229, 0.224, 0.225],
+            },
+        }
+
+        # Synthetic small dataset
+        x = torch.randn(4, 3, 64, 64)
+        y = torch.randint(0, 2, (4, 1, 64, 64)).float()
+        ds = TensorDataset(x, y)
+        self.train_loader = DataLoader(ds, batch_size=2)
+        self.val_loader = DataLoader(ds, batch_size=2)
+
+    def tearDown(self):
+        self.temp_dir.cleanup()
+
+    def test_checkpoint_saving_and_content(self):
+        from src.trainer import Trainer
+        model = ResNet34FCN(pretrained=False, num_classes=1)
+        trainer = Trainer(
+            model=model,
+            train_loader=self.train_loader,
+            val_loader=self.val_loader,
+            cfg=self.cfg,
+            device=torch.device("cpu"),
+        )
+        trainer.best_metric_val = 0.85
+        trainer.best_epoch = 2
+        trainer.history = [{"epoch": 1, "val_f1": 0.70}, {"epoch": 2, "val_f1": 0.85}]
+
+        chk_path = trainer.save_checkpoint(epoch=2, is_best=True)
+        self.assertTrue(os.path.exists(chk_path))
+        best_path = trainer.checkpoint_dir / "best_model.pth"
+        self.assertTrue(best_path.exists())
+
+        checkpoint = torch.load(chk_path, map_location="cpu", weights_only=False)
+        self.assertIn("epoch", checkpoint)
+        self.assertIn("model_state_dict", checkpoint)
+        self.assertIn("optimizer_state_dict", checkpoint)
+        self.assertIn("scheduler_state_dict", checkpoint)
+        self.assertIn("best_metric_val", checkpoint)
+        self.assertIn("best_epoch", checkpoint)
+        self.assertIn("history", checkpoint)
+        self.assertEqual(checkpoint["epoch"], 2)
+        self.assertEqual(checkpoint["best_metric_val"], 0.85)
+        self.assertEqual(len(checkpoint["history"]), 2)
+
+    def test_resume_checkpoint_restores_state(self):
+        from src.trainer import Trainer
+        model1 = ResNet34FCN(pretrained=False, num_classes=1)
+        trainer1 = Trainer(
+            model=model1,
+            train_loader=self.train_loader,
+            val_loader=self.val_loader,
+            cfg=self.cfg,
+            device=torch.device("cpu"),
+        )
+        trainer1.best_metric_val = 0.78
+        trainer1.best_epoch = 3
+        trainer1.history = [{"epoch": 1}, {"epoch": 2}, {"epoch": 3}]
+        saved_path = trainer1.save_checkpoint(epoch=3, is_best=True)
+
+        # Fresh trainer
+        model2 = ResNet34FCN(pretrained=False, num_classes=1)
+        trainer2 = Trainer(
+            model=model2,
+            train_loader=self.train_loader,
+            val_loader=self.val_loader,
+            cfg=self.cfg,
+            device=torch.device("cpu"),
+        )
+        next_epoch = trainer2.resume_checkpoint(saved_path)
+
+        self.assertEqual(next_epoch, 4)
+        self.assertEqual(trainer2.start_epoch, 4)
+        self.assertEqual(trainer2.best_metric_val, 0.78)
+        self.assertEqual(trainer2.best_epoch, 3)
+        self.assertEqual(len(trainer2.history), 3)
+
+        # Verify model weights are restored identically
+        for p1, p2 in zip(model1.parameters(), model2.parameters()):
+            self.assertTrue(torch.equal(p1, p2))
+
+    def test_resume_training_continuation(self):
+        from src.trainer import Trainer
+        model1 = ResNet34FCN(pretrained=False, num_classes=1)
+        cfg = dict(self.cfg)
+        cfg["training"] = dict(self.cfg["training"])
+        cfg["training"]["epochs"] = 3
+        cfg["training"]["warmup_epochs"] = 1
+
+        trainer1 = Trainer(
+            model=model1,
+            train_loader=self.train_loader,
+            val_loader=self.val_loader,
+            cfg=cfg,
+            device=torch.device("cpu"),
+        )
+        # Train epoch 1 only
+        train_m = trainer1.train_epoch(epoch=1)
+        val_m = trainer1.validate_epoch(epoch=1)
+        trainer1.history.append({"epoch": 1, **train_m, **val_m, "learning_rate": 1e-4, "epoch_time": 0.1})
+        saved_path = trainer1.save_checkpoint(epoch=1, is_best=True)
+
+        # Trainer 2 resumes and finishes training
+        model2 = ResNet34FCN(pretrained=False, num_classes=1)
+        trainer2 = Trainer(
+            model=model2,
+            train_loader=self.train_loader,
+            val_loader=self.val_loader,
+            cfg=cfg,
+            device=torch.device("cpu"),
+        )
+        trainer2.resume_checkpoint(saved_path)
+        self.assertEqual(trainer2.start_epoch, 2)
+
+        results = trainer2.fit()
+        # Epochs 2 and 3 should have been executed, bringing total history to 3
+        self.assertEqual(len(results["history"]), 3)
+        self.assertEqual([h["epoch"] for h in results["history"]], [1, 2, 3])
+
+
 if __name__ == "__main__":
     unittest.main()
+

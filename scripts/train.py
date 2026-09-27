@@ -28,10 +28,18 @@ from src.utils import load_config, set_seed
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Train ResNet34-FCN for glacial lake mapping")
+    parser = argparse.ArgumentParser(description="Train semantic segmentation models for glacial lake mapping")
     parser.add_argument(
         "--config", default="configs/default.yaml",
         help="Path to YAML configuration file (default: configs/default.yaml)"
+    )
+    parser.add_argument(
+        "--resume", type=str, default=None,
+        help="Path to checkpoint file (.pth) to resume training from"
+    )
+    parser.add_argument(
+        "--output-dir", type=str, default=None,
+        help="Root directory for persistent outputs (checkpoints, results, logs, predictions)"
     )
     parser.add_argument(
         "--smoke-test", action="store_true",
@@ -86,6 +94,15 @@ def main() -> None:
     elif args.smoke_test:
         cfg["data"]["num_workers"] = 0  # Instant loading for smoke testing on macOS
 
+    if args.output_dir is not None:
+        out_root = Path(args.output_dir)
+        cfg.setdefault("output", {})
+        cfg["output"]["checkpoint_dir"] = str(out_root / "checkpoints")
+        cfg["output"]["results_dir"] = str(out_root / "results")
+        cfg["output"]["plots_dir"] = str(out_root / "results" / "plots")
+        cfg["output"]["logs_dir"] = str(out_root / "results" / "logs")
+        cfg["output"]["predictions_dir"] = str(out_root / "results" / "predictions")
+
     set_seed(cfg.get("seed", 42))
 
     # Resolve target device
@@ -124,6 +141,10 @@ def main() -> None:
         device=device,
     )
 
+    # Resume from checkpoint if specified
+    if args.resume:
+        trainer.resume_checkpoint(args.resume)
+
     # Run training (or smoke test)
     if args.smoke_test:
         print(f"\n[SMOKE TEST MODE] Running {args.smoke_test_batches} train and val batches...")
@@ -131,8 +152,8 @@ def main() -> None:
         results = trainer.fit(smoke_test_batches=args.smoke_test_batches)
         elapsed = time.time() - t_start
         print(f"\n✓ Smoke test finished successfully in {elapsed:.2f}s.")
-        print(f"  Checkpoint saved to: checkpoints/latest_model.pth")
-        print(f"  Prediction sample saved to: results/predictions/epoch_01_predictions.png")
+        print(f"  Checkpoint saved to: {trainer.checkpoint_dir / 'latest_model.pth'}")
+        print(f"  Prediction sample saved to: {trainer.predictions_dir / 'epoch_01_predictions.png'}")
     else:
         results = trainer.fit()
         print(f"\nTraining complete. Best epoch: {results['best_epoch']} "
@@ -141,3 +162,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+

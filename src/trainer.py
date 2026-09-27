@@ -118,6 +118,7 @@ class Trainer:
         self.best_metric_name = self.out_cfg.get("best_metric", "f1")
         self.best_metric_val = -1.0
         self.best_epoch = 0
+        self.start_epoch = 1
         self.history = []
 
         # CSV log file
@@ -125,24 +126,78 @@ class Trainer:
         self._init_csv_log()
 
     def _init_csv_log(self) -> None:
-        """Initialize the CSV log file header."""
+        """Initialize the CSV log file header if not already present."""
+        if self.csv_log_path.exists():
+            return
         fieldnames = [
             "epoch",
             "train_loss",
             "train_iou",
             "train_f1",
+            "train_precision",
+            "train_recall",
             "val_loss",
             "val_iou",
             "val_f1",
             "val_precision",
             "val_recall",
             "val_accuracy",
-            "lr",
-            "epoch_time_sec",
+            "learning_rate",
+            "epoch_time",
         ]
         with open(self.csv_log_path, "w", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
             writer.writerow(fieldnames)
+
+    def resume_checkpoint(self, checkpoint_path: str) -> int:
+        """
+        Restore model, optimizer, scheduler, metrics, and history from a checkpoint file.
+
+        Args:
+            checkpoint_path: Path to .pth checkpoint file.
+
+        Returns:
+            The next epoch number to start training from.
+        """
+        chk_path = Path(checkpoint_path)
+        if not chk_path.is_file():
+            raise FileNotFoundError(f"Checkpoint not found at: {checkpoint_path}")
+
+        print(f"\nLoading checkpoint: {chk_path} ...")
+        checkpoint = torch.load(chk_path, map_location=self.device, weights_only=False)
+
+        # Restore model weights
+        self.model.load_state_dict(checkpoint["model_state_dict"])
+
+        # Restore optimizer state
+        if "optimizer_state_dict" in checkpoint and checkpoint["optimizer_state_dict"] is not None:
+            self.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+
+        # Restore scheduler state
+        if "scheduler_state_dict" in checkpoint and checkpoint["scheduler_state_dict"] is not None and self.scheduler is not None:
+            self.scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
+
+        # Restore metrics & history
+        saved_epoch = int(checkpoint.get("epoch", 0))
+        self.start_epoch = saved_epoch + 1
+        self.best_metric_val = float(checkpoint.get("best_metric_val", -1.0))
+        self.best_epoch = int(checkpoint.get("best_epoch", 0))
+        self.history = list(checkpoint.get("history", []))
+
+        # Restore random generator state if available and compatible
+        if "rng_state" in checkpoint and checkpoint["rng_state"] is not None:
+            try:
+                torch.set_rng_state(checkpoint["rng_state"])
+            except Exception:
+                pass
+
+        print(f"✓ Resumed successfully from checkpoint.")
+        print(f"  Last completed epoch: {saved_epoch}")
+        print(f"  Next training epoch : {self.start_epoch}")
+        print(f"  Best {self.best_metric_name} so far : {self.best_metric_val:.4f} (at epoch {self.best_epoch})")
+        print(f"  History length      : {len(self.history)} epochs restored\n")
+
+        return self.start_epoch
 
     def train_epoch(self, epoch: int, max_batches: Optional[int] = None) -> Dict[str, float]:
         """
@@ -153,7 +208,7 @@ class Trainer:
             max_batches: If set, limits iteration (for smoke testing).
 
         Returns:
-            Dict containing train_loss, train_iou, train_f1.
+            Dict containing train_loss, train_iou, train_f1, train_precision, train_recall.
         """
         self.model.train()
         tracker = MetricTracker(threshold=float(self.eval_cfg.get("threshold", 0.5)))
@@ -197,6 +252,8 @@ class Trainer:
             "train_loss": metrics.get("loss", 0.0),
             "train_iou": metrics.get("iou", 0.0),
             "train_f1": metrics.get("f1", 0.0),
+            "train_precision": metrics.get("precision", 0.0),
+            "train_recall": metrics.get("recall", 0.0),
         }
 
     @torch.no_grad()
@@ -249,26 +306,35 @@ class Trainer:
 
     def save_checkpoint(self, epoch: int, is_best: bool = False) -> str:
         """
-        Save model, optimizer, scheduler, and training metadata to checkpoint file.
+        Save model, optimizer, scheduler, and training metadata to checkpoint file atomically.
         """
         checkpoint = {
             "epoch": epoch,
             "model_state_dict": self.model.state_dict(),
             "optimizer_state_dict": self.optimizer.state_dict(),
-            "scheduler_state_dict": self.scheduler.state_dict(),
+            "scheduler_state_dict": self.scheduler.state_dict() if self.scheduler is not None else None,
             "best_metric_val": self.best_metric_val,
             "best_epoch": self.best_epoch,
+            "history": self.history,
             "cfg": self.cfg,
+            "rng_state": torch.get_rng_state(),
+            "cuda_rng_state": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
         }
 
-        # Save latest
+        # Save latest atomically via temporary file and rename
         latest_path = self.checkpoint_dir / "latest_model.pth"
-        torch.save(checkpoint, latest_path)
+        latest_tmp = self.checkpoint_dir / "latest_model.pth.tmp"
+        torch.save(checkpoint, latest_tmp)
+        os.replace(latest_tmp, latest_path)
+        print(f"Saved latest checkpoint: {latest_path}")
 
-        # Save best
+        # Save best atomically
         if is_best:
             best_path = self.checkpoint_dir / "best_model.pth"
-            torch.save(checkpoint, best_path)
+            best_tmp = self.checkpoint_dir / "best_model.pth.tmp"
+            torch.save(checkpoint, best_tmp)
+            os.replace(best_tmp, best_path)
+            print(f"Saved best checkpoint: {best_path} ({self.best_metric_name}: {self.best_metric_val:.4f})")
 
         return str(latest_path)
 
@@ -362,6 +428,9 @@ class Trainer:
         Returns:
             Dict of training history.
         """
+        start_epoch = 1 if smoke_test_batches is not None else self.start_epoch
+        total_epochs = 1 if smoke_test_batches is not None else self.epochs
+
         print(f"\n=======================================================")
         print(f"  Glacial Lake Segmentation — Training Started")
         print(f"=======================================================")
@@ -371,13 +440,19 @@ class Trainer:
         print(f"  Batch size       : {self.train_loader.batch_size}")
         print(f"  Optimizer        : AdamW (lr={self.optimizer.param_groups[0]['lr']:.1e})")
         print(f"  Loss function    : CombinedBCEDiceLoss")
-        print(f"  Epochs           : {self.epochs if smoke_test_batches is None else 1} "
+        print(f"  Epoch range      : {start_epoch} -> {total_epochs} "
               f"{'(Smoke Test Mode)' if smoke_test_batches else ''}")
         print(f"=======================================================\n")
 
-        total_epochs = 1 if smoke_test_batches is not None else self.epochs
+        if start_epoch > total_epochs:
+            print(f"Training already completed up to epoch {start_epoch - 1} (total epochs: {total_epochs}).")
+            return {
+                "best_epoch": self.best_epoch,
+                "best_metric_val": self.best_metric_val,
+                "history": self.history,
+            }
 
-        for epoch in range(1, total_epochs + 1):
+        for epoch in range(start_epoch, total_epochs + 1):
             t0 = time.time()
 
             train_metrics = self.train_epoch(epoch, max_batches=smoke_test_batches)
@@ -396,7 +471,17 @@ class Trainer:
                 self.best_metric_val = target_metric
                 self.best_epoch = epoch
 
-            # Save checkpoint
+            # Record history before saving checkpoint so latest history is persisted
+            record = {
+                "epoch": epoch,
+                **train_metrics,
+                **val_metrics,
+                "learning_rate": current_lr,
+                "epoch_time": round(epoch_time, 2),
+            }
+            self.history.append(record)
+
+            # Save checkpoint (contains updated self.history)
             self.save_checkpoint(epoch, is_best=is_best)
 
             # Save predictions occasionally or during smoke test
@@ -404,15 +489,7 @@ class Trainer:
             if (epoch % save_interval == 0) or is_best or (smoke_test_batches is not None):
                 self.save_prediction_samples(epoch, n_samples=4)
 
-            # Record CSV
-            record = {
-                "epoch": epoch,
-                **train_metrics,
-                **val_metrics,
-                "lr": current_lr,
-                "epoch_time_sec": round(epoch_time, 2),
-            }
-            self.history.append(record)
+            # Append to CSV log
             with open(self.csv_log_path, "a", newline="", encoding="utf-8") as f:
                 writer = csv.writer(f)
                 writer.writerow([
@@ -420,14 +497,16 @@ class Trainer:
                     f"{record['train_loss']:.4f}",
                     f"{record['train_iou']:.4f}",
                     f"{record['train_f1']:.4f}",
+                    f"{record.get('train_precision', 0.0):.4f}",
+                    f"{record.get('train_recall', 0.0):.4f}",
                     f"{record['val_loss']:.4f}",
                     f"{record['val_iou']:.4f}",
                     f"{record['val_f1']:.4f}",
                     f"{record['val_precision']:.4f}",
                     f"{record['val_recall']:.4f}",
                     f"{record['val_accuracy']:.4f}",
-                    f"{record['lr']:.2e}",
-                    record["epoch_time_sec"],
+                    f"{record['learning_rate']:.2e}",
+                    record["epoch_time"],
                 ])
 
             print(
@@ -444,3 +523,4 @@ class Trainer:
             "best_metric_val": self.best_metric_val,
             "history": self.history,
         }
+
