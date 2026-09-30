@@ -99,13 +99,13 @@ data/
 ### 1. ResNet34-FCN Baseline (`src/models/resnet34_fcn.py`)
 - **Encoder**: ResNet-34 backbone with ImageNet-pretrained weights (`ResNet34_Weights.DEFAULT`).
 - **Decoder**: Lightweight 5-stage progressive transposed-convolution upsampling head ($512 \to 256 \to 128 \to 64 \to 32 \to 16 \to 1$) with Batch Normalization and ReLU.
-- **Parameters**: 24,081,393 total (~21.28M encoder + ~2.79M decoder).
+- **Parameters**: 24,079,153 total (21,284,672 encoder + 2,794,481 decoder; 100% trainable).
 
 ### 2. DeepLabV3+ Advanced Model (`src/models/deeplabv3_plus.py`)
 - **Encoder**: ResNet-50 backbone with atrous convolutions in `layer4` maintaining an Output Stride of 16.
 - **ASPP Module**: Parallel multi-rate atrous convolutions (dilation rates $r \in \{6, 12, 18\}$), $1\times 1$ convolution, and Global Average Pooling with bilinear upsampling (256 output channels).
 - **Decoder**: Low-level feature projection ($256 \to 48$ channels from `layer1`, stride 4) concatenated with $4\times$ upsampled ASPP features, refined through $3\times 3$ separable convolutions and final $4\times$ bilinear upsampling.
-- **Parameters**: 40,351,809 total (~23.51M encoder + ~16.84M ASPP and decoder head).
+- **Parameters**: 40,347,041 total (23,508,032 encoder + 15,535,104 ASPP + 1,303,905 decoder; 100% trainable).
 
 ---
 
