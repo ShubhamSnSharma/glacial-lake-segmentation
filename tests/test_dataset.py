@@ -8,9 +8,13 @@ requiring the full multi-GB download.
 
 import os
 import shutil
+import sys
 import tempfile
 import unittest
 from pathlib import Path
+
+# Ensure repository root is in sys.path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import numpy as np
 from PIL import Image

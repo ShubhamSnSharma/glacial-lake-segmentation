@@ -25,3 +25,6 @@ streamlit>=1.28.0
 # Jupyter environment (Colab / local exploration)
 ipykernel>=6.0.0
 notebook>=6.5.0
+
+# Testing & Verification
+pytest>=7.0.0

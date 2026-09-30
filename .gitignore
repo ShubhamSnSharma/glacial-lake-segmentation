@@ -23,8 +23,10 @@ checkpoints/
 
 # Outputs & Generated Experiment Artifacts
 results/
+resnet34_fcn/
 outputs/
 logs/
+*.log
 wandb/
 runs/
 
