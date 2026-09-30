@@ -140,14 +140,14 @@ def parse_args() -> argparse.Namespace:
         "--device",
         type=str,
         default=None,
-        choices=["mps", "cpu"],
-        help="Inference device. Auto-detected (MPS -> CPU) when not specified.",
+        choices=["cuda", "mps", "cpu"],
+        help="Inference device. Auto-detected (CUDA -> MPS -> CPU) when not specified.",
     )
     parser.add_argument(
         "--num-workers",
         type=int,
         default=0,
-        help="DataLoader worker processes (0 = main process; safest for MPS)",
+        help="DataLoader worker processes (0 = main process; safest for MPS/CUDA Colab)",
     )
     parser.add_argument(
         "--seed",
@@ -163,9 +163,11 @@ def parse_args() -> argparse.Namespace:
 # ---------------------------------------------------------------------------
 
 def select_device(requested: Optional[str]) -> torch.device:
-    """Return MPS if available, otherwise CPU. Never requires CUDA."""
+    """Return CUDA if available, elif MPS if available, otherwise CPU."""
     if requested is not None:
         return torch.device(requested)
+    if torch.cuda.is_available():
+        return torch.device("cuda")
     if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
         return torch.device("mps")
     return torch.device("cpu")

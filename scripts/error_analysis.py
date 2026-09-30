@@ -116,8 +116,8 @@ def parse_args() -> argparse.Namespace:
         "--device",
         type=str,
         default=None,
-        choices=["mps", "cpu"],
-        help="Device to use (MPS -> CPU fallback if None)",
+        choices=["cuda", "mps", "cpu"],
+        help="Device to use (CUDA -> MPS -> CPU fallback if None)",
     )
     parser.add_argument(
         "--seed",
@@ -146,6 +146,8 @@ def parse_args() -> argparse.Namespace:
 def select_device(requested: str = None) -> torch.device:
     if requested:
         return torch.device(requested)
+    if torch.cuda.is_available():
+        return torch.device("cuda")
     if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
         return torch.device("mps")
     return torch.device("cpu")
