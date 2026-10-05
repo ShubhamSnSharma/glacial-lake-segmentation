@@ -1,12 +1,17 @@
 """
 predict.py
 ==========
-Standalone inference and prediction visualization for the trained DeepLabV3+ glacial lake
-segmentation model.
+Standalone inference and prediction visualization for trained glacial lake segmentation
+models (DeepLabV3+ and ResNet34-FCN baseline).
+
+Powered by the centralized inference backend (src/inference.py).
 
 Usage:
-    # Run inference on 12 random validation samples using best Colab checkpoint
+    # Run inference using DeepLabV3+ checkpoint (auto-detected)
     python scripts/predict.py --checkpoint checkpoints/best_amp_model.pth
+
+    # Run inference using ResNet34-FCN baseline checkpoint (auto-detected)
+    python scripts/predict.py --checkpoint resnet34_fcn/checkpoints/selected_model.pth
 
     # Specify number of samples, batch size, and output directory
     python scripts/predict.py \
@@ -15,9 +20,9 @@ Usage:
         --batch-size 4 \
         --output-dir results/predictions/run1
 
-    # Use a different threshold and fixed random seed
+    # Use a custom threshold and fixed random seed
     python scripts/predict.py \
-        --checkpoint checkpoints/best_amp_model.pth \
+        --checkpoint resnet34_fcn/checkpoints/selected_model.pth \
         --n-samples 20 \
         --threshold 0.5 \
         --seed 42
@@ -37,7 +42,7 @@ import sys
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List, Optional
 
 # Make src importable regardless of working directory
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -48,19 +53,19 @@ import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
-import torch.nn as nn
 
 from src.dataset import GLIDDataset
+from src.inference import (
+    DEFAULT_THRESHOLD,
+    IMAGENET_MEAN,
+    IMAGENET_STD,
+    create_prediction_overlay,
+    load_model,
+    select_device,
+    unnormalize_tensor,
+)
 from src.metrics import MetricTracker, compute_confusion_matrix_elements, calculate_metrics
-from src.models.deeplabv3_plus import DeepLabV3Plus
 from src.utils import ensure_dirs, set_seed
-
-
-# ---------------------------------------------------------------------------
-# Constants — ImageNet normalization used during training
-# ---------------------------------------------------------------------------
-IMAGENET_MEAN = [0.485, 0.456, 0.406]
-IMAGENET_STD  = [0.229, 0.224, 0.225]
 
 
 # ---------------------------------------------------------------------------
@@ -69,37 +74,48 @@ IMAGENET_STD  = [0.229, 0.224, 0.225]
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Run inference with the trained DeepLabV3+ glacial lake segmentation model"
+        description=(
+            "Run inference and visual evaluation with trained glacial lake segmentation models "
+            "(DeepLabV3+ or ResNet34-FCN)."
+        ),
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument(
         "--checkpoint",
         type=str,
         default="checkpoints/best_amp_model.pth",
-        help="Path to model checkpoint .pth file (default: checkpoints/best_amp_model.pth)",
+        help="Path to model checkpoint .pth file (e.g. checkpoints/best_amp_model.pth or resnet34_fcn/checkpoints/selected_model.pth)",
+    )
+    parser.add_argument(
+        "--model",
+        type=str,
+        default=None,
+        choices=["deeplabv3plus", "resnet34_fcn"],
+        help="Optional architecture override. Auto-detected from checkpoint metadata by default.",
     )
     parser.add_argument(
         "--val-dir",
         type=str,
         default="data/raw/val",
-        help="Path to validation split directory (default: data/raw/val)",
+        help="Path to validation split directory",
     )
     parser.add_argument(
         "--n-samples",
         type=int,
         default=12,
-        help="Number of validation samples to visualize (default: 12)",
+        help="Number of validation samples to visualize",
     )
     parser.add_argument(
         "--batch-size",
         type=int,
         default=4,
-        help="Inference batch size (default: 4)",
+        help="Inference batch size",
     )
     parser.add_argument(
         "--threshold",
         type=float,
-        default=0.5,
-        help="Sigmoid probability threshold for lake class (default: 0.5)",
+        default=DEFAULT_THRESHOLD,
+        help="Sigmoid probability threshold for lake class",
     )
     parser.add_argument(
         "--output-dir",
@@ -121,113 +137,20 @@ def parse_args() -> argparse.Namespace:
         "--seed",
         type=int,
         default=42,
-        help="Random seed for reproducible sample selection (default: 42)",
+        help="Random seed for reproducible sample selection",
     )
     parser.add_argument(
         "--num-workers",
         type=int,
         default=0,
-        help="DataLoader num_workers (default: 0 — safe for MPS/CUDA)",
+        help="DataLoader num_workers (0 = main process, safe for MPS/CUDA)",
     )
     return parser.parse_args()
 
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Visualization Helpers
 # ---------------------------------------------------------------------------
-
-def select_device(requested: Optional[str]) -> torch.device:
-    """Select inference device: CUDA if available, elif MPS if available, else CPU."""
-    if requested is not None:
-        return torch.device(requested)
-    if torch.cuda.is_available():
-        return torch.device("cuda")
-    if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-        return torch.device("mps")
-    return torch.device("cpu")
-
-
-def load_model(checkpoint_path: str, device: torch.device) -> Tuple[nn.Module, dict]:
-    """
-    Build DeepLabV3+ architecture and load trained weights from checkpoint.
-
-    Supports both:
-      - Colab AMP checkpoint format  (keys: model_state_dict, best_f1, epoch, ...)
-      - Local Trainer checkpoint format (keys: model_state_dict, best_metric_val, ...)
-
-    Args:
-        checkpoint_path: Path to .pth checkpoint file.
-        device: Target inference device.
-
-    Returns:
-        (model, checkpoint_dict) tuple.
-    """
-    chk_path = Path(checkpoint_path)
-    if not chk_path.is_file():
-        raise FileNotFoundError(
-            f"Checkpoint not found: '{chk_path}'\n"
-            "Download best_amp_model.pth from Google Drive and place it in checkpoints/."
-        )
-
-    print(f"Loading checkpoint: {chk_path} ...")
-    checkpoint = torch.load(chk_path, map_location="cpu", weights_only=False)
-
-    # Build architecture (pretrained=False — weights come entirely from checkpoint)
-    model = DeepLabV3Plus(pretrained=False, num_classes=1)
-    model.load_state_dict(checkpoint["model_state_dict"])
-    model = model.to(device)
-    model.eval()
-
-    # Report checkpoint provenance
-    epoch      = checkpoint.get("epoch", "unknown")
-    best_f1    = checkpoint.get("best_f1", checkpoint.get("best_metric_val", "unknown"))
-    model_name = checkpoint.get(
-        "model_name",
-        checkpoint.get("cfg", {}).get("model", {}).get("name", "deeplabv3plus"),
-    )
-    print(f"  Checkpoint loaded  — epoch {epoch}, best F1 = {best_f1}")
-    print(f"  Model: {model_name}")
-
-    return model, checkpoint
-
-
-def _unnormalize(tensor: torch.Tensor) -> np.ndarray:
-    """Reverse ImageNet normalization; return HWC uint8 numpy array."""
-    t = tensor.clone().cpu().float()
-    for c, (m, s) in enumerate(zip(IMAGENET_MEAN, IMAGENET_STD)):
-        t[c] = t[c] * s + m
-    t = t.permute(1, 2, 0).numpy()
-    return np.clip(t * 255, 0, 255).astype(np.uint8)
-
-
-def make_overlay(
-    img_np: np.ndarray,
-    gt_np: np.ndarray,
-    pred_np: np.ndarray,
-) -> np.ndarray:
-    """
-    Build a colour overlay showing GT and prediction on the satellite image.
-
-    Colour coding:
-      Cyan  (#00E5FF) — True Positive  (lake predicted correctly)
-      Red   (#FF1744) — False Positive (background predicted as lake)
-      White (#FFFFFF) — False Negative (lake missed by model)
-    """
-    overlay = img_np.copy().astype(np.float32)
-    gt   = gt_np.astype(bool)
-    pred = pred_np.astype(bool)
-
-    tp = gt &  pred
-    fp = ~gt & pred
-    fn = gt & ~pred
-
-    alpha = 0.55
-    overlay[tp] = (1 - alpha) * overlay[tp] + alpha * np.array([0,   229, 255], dtype=np.float32)
-    overlay[fp] = (1 - alpha) * overlay[fp] + alpha * np.array([255, 23,  68],  dtype=np.float32)
-    overlay[fn] = (1 - alpha) * overlay[fn] + alpha * np.array([255, 255, 255], dtype=np.float32)
-
-    return np.clip(overlay, 0, 255).astype(np.uint8)
-
 
 def save_sample_figure(
     img_tensor: torch.Tensor,
@@ -244,10 +167,10 @@ def save_sample_figure(
 
     Panels: Satellite Image | Ground-Truth Mask | Predicted Mask | Overlay
     """
-    img_np  = _unnormalize(img_tensor)
-    gt_np   = gt_tensor.squeeze().cpu().numpy()
-    pred_np = pred_tensor.squeeze().cpu().numpy()
-    overlay = make_overlay(img_np, gt_np, pred_np)
+    img_np  = unnormalize_tensor(img_tensor)
+    gt_np   = gt_tensor.squeeze().cpu().numpy().astype(np.uint8)
+    pred_np = pred_tensor.squeeze().cpu().numpy().astype(np.uint8)
+    overlay = create_prediction_overlay(img_np, pred_np, gt_mask=gt_np)
 
     fig, axes = plt.subplots(1, 4, figsize=(18, 4.5))
 
@@ -299,6 +222,7 @@ def save_summary_grid(
     gts: List[np.ndarray],
     preds: List[np.ndarray],
     save_path: Path,
+    model_title: str = "Glacial Lake Segmentation",
     n_cols: int = 4,
 ) -> None:
     """
@@ -316,7 +240,7 @@ def save_summary_grid(
         row_pred = row_img + 1
         col      = i % n_cols
 
-        overlay = make_overlay(images[i], gts[i], preds[i])
+        overlay = create_prediction_overlay(images[i], preds[i], gt_mask=gts[i])
         axes[row_img,  col].imshow(images[i])
         axes[row_img,  col].axis("off")
         axes[row_img,  col].set_title(f"Sample {i + 1}", fontsize=8)
@@ -344,7 +268,7 @@ def save_summary_grid(
         bbox_to_anchor=(0.5, -0.01),
     )
     fig.suptitle(
-        "DeepLabV3+ Glacial Lake Segmentation — Summary Grid",
+        f"{model_title} — Summary Grid",
         fontsize=13,
         fontweight="bold",
     )
@@ -376,10 +300,15 @@ def run_inference(args: argparse.Namespace) -> None:
     ensure_dirs(str(out_dir))
     print(f"Output directory: {out_dir.resolve()}")
 
-    # --- Load model ---
-    model, checkpoint = load_model(args.checkpoint, device)
-    param_count = sum(p.numel() for p in model.parameters())
-    print(f"Model parameters: {param_count:,}")
+    # --- Load model via centralized backend ---
+    model, metadata = load_model(
+        checkpoint_path=args.checkpoint,
+        device=device,
+        model_override=args.model,
+    )
+    print(f"Loaded architecture: {metadata.arch_type} ({metadata.model_name})")
+    print(f"Checkpoint provenance: epoch={metadata.epoch}, best_f1={metadata.best_f1}")
+    print(f"Model parameters: {metadata.total_parameters:,}")
 
     # --- Validation dataset (no augmentation, is_train=False) ---
     val_ds = GLIDDataset(
@@ -427,7 +356,7 @@ def run_inference(args: argparse.Namespace) -> None:
         imgs_tensor  = torch.stack(batch_imgs).to(device)   # (B, 3, 512, 512)
         masks_tensor = torch.stack(batch_masks).to(device)  # (B, 1, 512, 512)
 
-        # Inference — no AMP, no channels_last (both MPS-safe)
+        # Inference using centralized evaluation flow
         with torch.inference_mode():
             logits = model(imgs_tensor)                      # (B, 1, 512, 512)
             probs  = torch.sigmoid(logits)
@@ -447,9 +376,9 @@ def run_inference(args: argparse.Namespace) -> None:
             )
             sample_metrics = calculate_metrics(tp, fp, fn, tn)
 
-            img_np  = _unnormalize(img.cpu())
-            gt_np   = gt.squeeze().cpu().numpy()
-            pred_np = pred.squeeze().numpy()
+            img_np  = unnormalize_tensor(img.cpu())
+            gt_np   = gt.squeeze().cpu().numpy().astype(np.uint8)
+            pred_np = pred.squeeze().numpy().astype(np.uint8)
 
             all_images.append(img_np)
             all_gts.append(gt_np)
@@ -477,12 +406,18 @@ def run_inference(args: argparse.Namespace) -> None:
 
     # --- Summary grid ---
     summary_path = out_dir / "summary_grid.png"
-    save_summary_grid(all_images, all_gts, all_preds, summary_path)
+    save_summary_grid(
+        images=all_images,
+        gts=all_gts,
+        preds=all_preds,
+        save_path=summary_path,
+        model_title=f"{metadata.arch_type} Glacial Lake Segmentation",
+    )
 
     # --- Aggregate metrics ---
     agg = tracker.compute()
     print("\n" + "=" * 60)
-    print(f"  INFERENCE COMPLETE — {n_samples} samples in {elapsed:.1f}s")
+    print(f"  INFERENCE COMPLETE ({metadata.arch_type}) — {n_samples} samples in {elapsed:.1f}s")
     print("=" * 60)
     print(f"  IoU            : {agg['iou']:.4f}  ({agg['iou']*100:.2f}%)")
     print(f"  F1 / Dice      : {agg['f1']:.4f}  ({agg['f1']*100:.2f}%)")
@@ -493,24 +428,24 @@ def run_inference(args: argparse.Namespace) -> None:
 
     # --- Metrics text file ---
     metrics_path = out_dir / "metrics_summary.txt"
-    chk_epoch = checkpoint.get("epoch", "unknown")
-    chk_f1    = checkpoint.get("best_f1", checkpoint.get("best_metric_val", "unknown"))
     with open(metrics_path, "w") as f:
-        f.write("DeepLabV3+ Glacial Lake Segmentation — Inference Metrics\n")
+        f.write(f"{metadata.arch_type} Glacial Lake Segmentation — Inference Metrics\n")
         f.write("=" * 60 + "\n")
-        f.write(f"Checkpoint : {args.checkpoint}\n")
-        f.write(f"Epoch      : {chk_epoch}\n")
-        f.write(f"Best F1    : {chk_f1}\n")
-        f.write(f"Samples    : {n_samples} / {n_total}\n")
-        f.write(f"Threshold  : {args.threshold}\n")
-        f.write(f"Device     : {device}\n")
-        f.write(f"Elapsed    : {elapsed:.1f}s\n")
+        f.write(f"Architecture: {metadata.arch_type} ({metadata.model_name})\n")
+        f.write(f"Checkpoint  : {args.checkpoint}\n")
+        f.write(f"Epoch       : {metadata.epoch}\n")
+        f.write(f"Best F1     : {metadata.best_f1}\n")
+        f.write(f"Parameters  : {metadata.total_parameters:,}\n")
+        f.write(f"Samples     : {n_samples} / {n_total}\n")
+        f.write(f"Threshold   : {args.threshold}\n")
+        f.write(f"Device      : {device}\n")
+        f.write(f"Elapsed     : {elapsed:.1f}s\n")
         f.write("-" * 60 + "\n")
-        f.write(f"IoU        : {agg['iou']:.4f}\n")
-        f.write(f"F1 / Dice  : {agg['f1']:.4f}\n")
-        f.write(f"Precision  : {agg['precision']:.4f}\n")
-        f.write(f"Recall     : {agg['recall']:.4f}\n")
-        f.write(f"Accuracy   : {agg['accuracy']:.4f}\n")
+        f.write(f"IoU         : {agg['iou']:.4f}\n")
+        f.write(f"F1 / Dice   : {agg['f1']:.4f}\n")
+        f.write(f"Precision   : {agg['precision']:.4f}\n")
+        f.write(f"Recall      : {agg['recall']:.4f}\n")
+        f.write(f"Accuracy    : {agg['accuracy']:.4f}\n")
     print(f"\nMetrics saved  -> {metrics_path}")
     print(f"All outputs in : {out_dir.resolve()}\n")
 

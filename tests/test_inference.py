@@ -295,3 +295,113 @@ class TestInferencePipeline:
         assert isinstance(result, PredictionResult)
         assert result.binary_mask.shape == (512, 512)
         assert "DeepLabV3+" in str(predictor)
+
+
+# ---------------------------------------------------------------------------
+# CLI Script Integration Tests
+# ---------------------------------------------------------------------------
+
+class TestPredictScript:
+    """Test suite for scripts/predict.py refactored CLI workflow."""
+
+    def test_predict_parse_args_defaults(self):
+        """Verify default argument parsing in scripts/predict.py."""
+        from scripts.predict import parse_args
+        import sys
+
+        orig_argv = sys.argv
+        try:
+            sys.argv = ["scripts/predict.py"]
+            args = parse_args()
+            assert args.checkpoint == "checkpoints/best_amp_model.pth"
+            assert args.model is None
+            assert args.threshold == 0.5
+            assert args.n_samples == 12
+        finally:
+            sys.argv = orig_argv
+
+    @pytest.mark.skipif(not DEEPLAB_CHECKPOINT.exists(), reason="DeepLabV3+ checkpoint not present")
+    def test_run_inference_deeplabv3_cli(self, tmp_path):
+        """Verify scripts/predict.py run_inference with DeepLabV3+ on synthetic val set."""
+        from scripts.predict import parse_args, run_inference
+        import tempfile
+
+        # Create temporary mini-val dataset with 2 synthetic images
+        val_dir = tmp_path / "val"
+        img_dir = val_dir / "images"
+        msk_dir = val_dir / "labels"
+        img_dir.mkdir(parents=True)
+        msk_dir.mkdir(parents=True)
+
+        for i in (1, 2):
+            Image.new("RGB", (512, 512), color=(50 * i, 70, 90)).save(img_dir / f"{i}.png")
+            Image.new("L", (512, 512), color=255 if i == 1 else 0).save(msk_dir / f"{i}.png")
+
+        out_dir = tmp_path / "out_dlv3"
+
+        import sys
+        orig_argv = sys.argv
+        try:
+            sys.argv = [
+                "scripts/predict.py",
+                "--checkpoint", str(DEEPLAB_CHECKPOINT),
+                "--val-dir", str(val_dir),
+                "--output-dir", str(out_dir),
+                "--n-samples", "2",
+                "--batch-size", "2",
+                "--device", "cpu",
+            ]
+            args = parse_args()
+            run_inference(args)
+
+            assert (out_dir / "summary_grid.png").is_file()
+            assert (out_dir / "metrics_summary.txt").is_file()
+            assert (out_dir / "sample_001_1.png").is_file()
+            assert (out_dir / "sample_002_2.png").is_file()
+
+            summary_text = (out_dir / "metrics_summary.txt").read_text()
+            assert "DeepLabV3+" in summary_text
+        finally:
+            sys.argv = orig_argv
+
+    @pytest.mark.skipif(not RESNET_CHECKPOINT.exists(), reason="ResNet34-FCN checkpoint not present")
+    def test_run_inference_resnet34_cli(self, tmp_path):
+        """Verify scripts/predict.py run_inference with ResNet34-FCN on synthetic val set."""
+        from scripts.predict import parse_args, run_inference
+
+        val_dir = tmp_path / "val"
+        img_dir = val_dir / "images"
+        msk_dir = val_dir / "labels"
+        img_dir.mkdir(parents=True)
+        msk_dir.mkdir(parents=True)
+
+        for i in (1, 2):
+            Image.new("RGB", (512, 512), color=(40 * i, 60, 80)).save(img_dir / f"{i}.png")
+            Image.new("L", (512, 512), color=255 if i == 1 else 0).save(msk_dir / f"{i}.png")
+
+        out_dir = tmp_path / "out_resnet"
+
+        import sys
+        orig_argv = sys.argv
+        try:
+            sys.argv = [
+                "scripts/predict.py",
+                "--checkpoint", str(RESNET_CHECKPOINT),
+                "--val-dir", str(val_dir),
+                "--output-dir", str(out_dir),
+                "--n-samples", "2",
+                "--batch-size", "2",
+                "--device", "cpu",
+            ]
+            args = parse_args()
+            run_inference(args)
+
+            assert (out_dir / "summary_grid.png").is_file()
+            assert (out_dir / "metrics_summary.txt").is_file()
+            assert (out_dir / "sample_001_1.png").is_file()
+            assert (out_dir / "sample_002_2.png").is_file()
+
+            summary_text = (out_dir / "metrics_summary.txt").read_text()
+            assert "ResNet34-FCN" in summary_text
+        finally:
+            sys.argv = orig_argv
