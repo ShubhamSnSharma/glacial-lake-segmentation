@@ -26,6 +26,9 @@ results/
 resnet34_fcn/
 outputs/
 logs/
+scratch/
+*ppt_rendered_slides*
+*ppt_assets*
 *.log
 wandb/
 runs/
