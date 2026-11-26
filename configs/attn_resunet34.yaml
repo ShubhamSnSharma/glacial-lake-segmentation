@@ -1,0 +1,102 @@
+# =============================================================================
+# Glacial Lake Mapping — Attn-ResUNet34 (Attn-GLNet) Configuration
+# =============================================================================
+# Custom Attention-Gated ResNet-34 U-Net architecture for glacial lake segmentation.
+#
+# Fair-Comparison Constraints:
+# ----------------------------
+# Matches the training protocol of ResNet34-FCN baseline and DeepLabV3+ in all
+# experimental dimensions:
+#   - Dataset split: data/raw/GLID for train (16,000 patches), data/raw/val for val (2,367 patches)
+#   - Preprocessing: ImageNet mean/std, 512×512 resolution
+#   - Augmentation: Horizontal flip, vertical flip, random rotation (90° multiples)
+#   - Loss: CombinedBCEDiceLoss (0.5 BCE + 0.5 Dice)
+#   - Optimizer: AdamW (lr=1e-4, weight_decay=1e-4)
+#   - LR Schedule: CosineAnnealing with 3 warmup epochs (10% warmup)
+#   - Evaluation: Global confusion matrix metrics at threshold 0.5
+#   - Batch size: 8 (conservative starting point for Colab T4 / local MPS)
+#   - Random seed: 42
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Data
+# -----------------------------------------------------------------------------
+data:
+  raw_dir: "data/raw"
+  train_subdir: "GLID"
+  val_subdir: "val"
+  image_subdir: "images"
+  mask_subdir: "labels"
+
+  image_size: 512
+
+  # ImageNet normalization — standard across all models
+  normalize_mean: [0.485, 0.456, 0.406]
+  normalize_std:  [0.229, 0.224, 0.225]
+
+  # DataLoader settings
+  batch_size: 8
+  num_workers: 2
+  pin_memory: true
+
+  # Augmentation (training only)
+  augmentation:
+    horizontal_flip: true
+    vertical_flip: true
+    random_rotation: true
+    rotation_degrees: 90
+
+# -----------------------------------------------------------------------------
+# Model
+# -----------------------------------------------------------------------------
+model:
+  name: "attn_resunet34"
+  pretrained: true              # ImageNet pretrained ResNet-34 backbone
+  pretrained_source: "imagenet" # ResNet34_Weights.DEFAULT from torchvision
+  num_classes: 1                # Binary: 1 = glacial lake, 0 = background
+  freeze_encoder: false         # End-to-end fine-tuning
+  use_attention: true           # Enable multi-scale additive attention gates
+
+# -----------------------------------------------------------------------------
+# Training
+# -----------------------------------------------------------------------------
+training:
+  epochs: 30
+  learning_rate: 1.0e-4
+  weight_decay: 1.0e-4
+  scheduler: "cosine"
+  warmup_epochs: 3
+  seed: 42
+
+  # Mixed precision (enabled by default on CUDA)
+  mixed_precision: true
+
+  # Loss function
+  loss: "bce_dice"
+  dice_weight: 0.5
+  bce_weight: 0.5
+
+# -----------------------------------------------------------------------------
+# Evaluation
+# -----------------------------------------------------------------------------
+evaluation:
+  threshold: 0.5
+  metrics: ["precision", "recall", "f1", "iou", "accuracy"]
+
+# -----------------------------------------------------------------------------
+# Output Directories
+# -----------------------------------------------------------------------------
+output:
+  checkpoint_dir: "attn_resunet34/checkpoints"
+  results_dir: "attn_resunet34/results"
+  plots_dir: "attn_resunet34/results/plots"
+  logs_dir: "attn_resunet34/results/logs"
+  predictions_dir: "attn_resunet34/results/predictions"
+
+  best_metric: "f1"
+  save_predictions_every: 5
+
+# -----------------------------------------------------------------------------
+# Reproducibility
+# -----------------------------------------------------------------------------
+seed: 42

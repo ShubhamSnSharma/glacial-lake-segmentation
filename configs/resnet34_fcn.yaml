@@ -1,0 +1,118 @@
+# =============================================================================
+# Glacial Lake Mapping — ResNet34-FCN Baseline Configuration
+# =============================================================================
+# Step 3: Baseline comparison with DeepLabV3+ (best_amp_model.pth, epoch 26,
+#         val F1 = 0.9397, IoU = 0.8862).
+#
+# Fair-comparison constraints
+# ---------------------------
+# This config deliberately matches the DeepLabV3+ training conditions in every
+# dimension that can be held equal:
+#   - Same dataset split (data/raw/GLID for train, data/raw/val for val)
+#   - Same image preprocessing (ImageNet mean/std, 512×512)
+#   - Same augmentation flags (H-flip, V-flip, 90° multiples)
+#   - Same loss function (BCE + Dice, 0.5/0.5 weighting)
+#   - Same optimizer (AdamW, lr=1e-4, wd=1e-4)
+#   - Same LR schedule (cosine with linear warmup)
+#   - Same evaluation metrics and threshold (0.5)
+#   - Same batch size (8) and random seed (42)
+#
+# Documented deviations from the paper (Ma et al., 2025)
+# -------------------------------------------------------
+#   1. Backbone pretraining: ImageNet (ResNet34_Weights.DEFAULT) instead of
+#      GID dataset pretraining — GID weights are not publicly available.
+#   2. Decoder: Lightweight 5-stage progressive transposed-convolution FCN head
+#      (512→256→128→64→32→16→1). The paper describes "ResNet34-FT with FCN
+#      decoder" but does not publish decoder sub-layer specifications.
+#   3. Hardware: Apple Silicon MPS (no CUDA). CUDA AMP is not used.
+#   4. Training epochs: 30 (chosen to be comparable to the 26-epoch
+#      DeepLabV3+ run, within ±4 epochs). The paper does not report baseline
+#      epoch counts.
+#
+# All architecture choices are documented in src/models/resnet34_fcn.py.
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Data  (identical to default.yaml — ensures same split and preprocessing)
+# -----------------------------------------------------------------------------
+data:
+  raw_dir: "data/raw"
+  train_subdir: "GLID"
+  val_subdir: "val"
+  image_subdir: "images"
+  mask_subdir: "labels"
+
+  image_size: 512
+
+  # ImageNet normalization — same as DeepLabV3+ run
+  normalize_mean: [0.485, 0.456, 0.406]
+  normalize_std:  [0.229, 0.224, 0.225]
+
+  # DataLoader
+  # num_workers=0: avoids MPS / multiprocessing conflicts on macOS (same
+  # practice as scripts/evaluate.py). Slightly slower data loading but
+  # avoids "RuntimeError: DataLoader worker (pid X) is killed by signal".
+  batch_size: 8
+  num_workers: 0
+  pin_memory: false  # pin_memory requires CUDA; disabled for MPS
+
+  # Augmentation — identical to DeepLabV3+ training
+  augmentation:
+    horizontal_flip: true
+    vertical_flip: true
+    random_rotation: true
+    rotation_degrees: 90
+
+# -----------------------------------------------------------------------------
+# Model
+# -----------------------------------------------------------------------------
+model:
+  name: "resnet34_fcn"
+  pretrained: true              # ImageNet pretrained ResNet-34
+  pretrained_source: "imagenet" # ResNet34_Weights.DEFAULT from torchvision
+  num_classes: 1                # Binary: 1 = glacial lake, 0 = background
+  freeze_encoder: false         # End-to-end fine-tuning from epoch 1
+
+# -----------------------------------------------------------------------------
+# Training
+# -----------------------------------------------------------------------------
+training:
+  epochs: 30
+  learning_rate: 1.0e-4
+  weight_decay: 1.0e-4
+  scheduler: "cosine"
+  # 3 warmup epochs ≈ same warmup fraction as DeepLabV3+ (5/50 = 10%).
+  # 3/30 = 10%. Keeps the proportional warmup identical.
+  warmup_epochs: 3
+  seed: 42
+
+  # Loss function — identical to DeepLabV3+
+  loss: "bce_dice"
+  dice_weight: 0.5
+  bce_weight: 0.5
+
+# -----------------------------------------------------------------------------
+# Evaluation
+# -----------------------------------------------------------------------------
+evaluation:
+  threshold: 0.5
+  metrics: ["precision", "recall", "f1", "iou", "accuracy"]
+
+# -----------------------------------------------------------------------------
+# Output  (all outputs go to resnet34_fcn/ to isolate from DeepLabV3+ results)
+# These paths are used as defaults but --output-dir overrides them via CLI.
+# -----------------------------------------------------------------------------
+output:
+  checkpoint_dir: "resnet34_fcn/checkpoints"
+  results_dir: "resnet34_fcn/results"
+  plots_dir: "resnet34_fcn/results/plots"
+  logs_dir: "resnet34_fcn/results/logs"
+  predictions_dir: "resnet34_fcn/results/predictions"
+
+  best_metric: "f1"
+  save_predictions_every: 5
+
+# -----------------------------------------------------------------------------
+# Reproducibility
+# -----------------------------------------------------------------------------
+seed: 42

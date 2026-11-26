@@ -97,6 +97,11 @@ glacial-lake-segmentation/
 ├── README.md                                                   # Main project overview & benchmarks
 ├── requirements.txt                                            # Environment dependencies
 │
+├── configs/                                                    # Architecture & training YAML configurations
+│   ├── attn_resunet34.yaml
+│   ├── default.yaml
+│   └── resnet34_fcn.yaml
+│
 ├── data/
 │   └── README.md                                               # Dataset specifications & Zenodo download guide
 │
@@ -106,20 +111,39 @@ glacial-lake-segmentation/
 │   ├── Glacial_Lake_Attn_ResUNet34_Training.ipynb              # Attention ResUNet34 training
 │   └── Glacial_Lake_Three_Model_Comparison.ipynb               # 3-model validation benchmark & visualizations
 │
-└── reports/                                                    # University Capstone Deliverables
-    ├── Glacial_Lake_Segmentation_Capstone_Report.pdf           # Capstone Project Report (PDF)
-    ├── Glacial_Lake_Segmentation_Capstone_Report.docx          # Capstone Project Report (DOCX)
-    ├── Glacial_Lake_Segmentation_Capstone_Presentation.pdf     # Capstone Presentation Slides (PDF)
-    ├── Glacial_Lake_Segmentation_Capstone_Presentation.pptx    # Capstone Presentation Slides (PPTX)
-    ├── Capstone_Project_Paper_1.pdf                            # Reference study (Ma et al. 2025)
-    └── figures/                                                # High-resolution architectural & comparison figures
-        ├── chart_model_comparison.png
-        ├── diagram_pipeline.png
-        ├── diagram_deeplabv3.png
-        ├── diagram_models_2_3.png
-        ├── rep_1.png
-        ├── diff_105.png
-        └── fail_10.png
+├── reports/                                                    # University Capstone Deliverables
+│   ├── Glacial_Lake_Segmentation_Capstone_Report.pdf           # Capstone Project Report (PDF)
+│   ├── Glacial_Lake_Segmentation_Capstone_Report.docx          # Capstone Project Report (DOCX)
+│   ├── Glacial_Lake_Segmentation_Capstone_Presentation.pdf     # Capstone Presentation Slides (PDF)
+│   ├── Glacial_Lake_Segmentation_Capstone_Presentation.pptx    # Capstone Presentation Slides (PPTX)
+│   ├── Capstone_Project_Paper_1.pdf                            # Reference study (Ma et al. 2025)
+│   └── figures/                                                # High-resolution architectural & comparison figures
+│       ├── chart_model_comparison.png
+│       ├── diagram_pipeline.png
+│       ├── diagram_deeplabv3.png
+│       ├── diagram_models_2_3.png
+│       ├── rep_1.png
+│       ├── diff_105.png
+│       └── fail_10.png
+│
+├── scripts/                                                    # Standalone execution pipelines
+│   └── evaluate.py                                             # Validation evaluation pipeline called by notebooks
+│
+└── src/                                                        # Core PyTorch package imported by Colab notebooks
+    ├── __init__.py
+    ├── dataset.py                                              # GLIDDataset loader & transforms
+    ├── dataset_staging.py                                      # Fast dataset staging utilities
+    ├── inference.py                                            # Standalone inference backend
+    ├── losses.py                                               # CombinedBCEDiceLoss implementation
+    ├── metrics.py                                              # MetricTracker (Dice, IoU, Precision, Recall)
+    ├── model.py                                                # build_model entry point
+    ├── models/                                                 # Neural network architecture definitions
+    │   ├── __init__.py
+    │   ├── attn_resunet.py                                     # Attention ResUNet34 architecture
+    │   ├── deeplabv3_plus.py                                   # DeepLabV3+ with ResNet-50 backbone
+    │   └── resnet34_fcn.py                                     # ResNet34-FCN baseline architecture
+    ├── trainer.py                                              # Model training loop & checkpoint management
+    └── utils.py                                                # Seed, device, and filesystem helpers
 ```
 
 ---

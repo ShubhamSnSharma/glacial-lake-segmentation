@@ -86,3 +86,11 @@ service_account.json
 *.swp
 *.swo
 *~
+
+# Local Application & Testing Files (Retained locally, excluded from repository)
+app.py
+tests/
+
+# Standalone CLI scripts not called by Colab notebooks (only evaluate.py is needed)
+scripts/*
+!scripts/evaluate.py

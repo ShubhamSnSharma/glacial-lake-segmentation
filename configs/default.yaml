@@ -1,0 +1,112 @@
+# =============================================================================
+# Glacial Lake Mapping — Default Configuration
+# =============================================================================
+# All paths are relative to the project root unless otherwise specified.
+# Do NOT hardcode absolute paths here.
+
+# -----------------------------------------------------------------------------
+# Data
+# -----------------------------------------------------------------------------
+data:
+  # Root directory that contains the extracted GLID and val subdirectories
+  raw_dir: "data/raw"
+
+  # Sub-directory names inside raw_dir
+  # These will be auto-detected by inspect_dataset.py if unknown
+  train_subdir: "GLID"       # GLID.rar extracts to this name
+  val_subdir: "val"          # val.zip extracts to this name
+
+  # Sub-directory names for images and masks within each split directory
+  # Will be auto-detected (candidates: "images", "image", "img")
+  image_subdir: "images"
+  # Mask candidates: "labels", "label", "masks", "mask", "annotation"
+  mask_subdir: "labels"
+
+  # Input image size fed to the model (H x W)
+  image_size: 512
+
+  # Normalization statistics (ImageNet defaults — update after computing dataset stats)
+  # These will be recalculated by inspect_dataset.py and saved to results/logs/
+  normalize_mean: [0.485, 0.456, 0.406]
+  normalize_std:  [0.229, 0.224, 0.225]
+
+  # DataLoader
+  batch_size: 8
+  num_workers: 4
+  pin_memory: true
+
+  # Augmentation (training only)
+  augmentation:
+    horizontal_flip: true
+    vertical_flip: true
+    random_rotation: true
+    rotation_degrees: 90   # Applied in multiples (0, 90, 180, 270)
+
+# -----------------------------------------------------------------------------
+# Model Selection
+# -----------------------------------------------------------------------------
+model:
+  # Choose architecture:
+  #   - "resnet34_fcn" : Baseline (ResNet-34 + 5-stage progressive FCN decoder)
+  #   - "deeplabv3plus" : Advanced (ResNet-50 + ASPP + boundary decoder)
+  name: "resnet34_fcn"
+
+  # Pretraining
+  pretrained: true              # ImageNet pretrained weights
+  pretrained_source: "imagenet" # Documented implementation choice
+  num_classes: 1                # Binary segmentation (1 = lake, 0 = background)
+  freeze_encoder: false         # If true, freezes encoder for head training
+
+  # DeepLabV3+ specific settings (used when name="deeplabv3plus")
+  deeplabv3plus:
+    backbone: "resnet50"
+    output_stride: 16
+    aspp_dilations: [6, 12, 18]
+    aspp_out_channels: 256
+    low_level_proj_channels: 48
+
+# -----------------------------------------------------------------------------
+# Training
+# (populated in Milestone 2)
+# -----------------------------------------------------------------------------
+training:
+  epochs: 50
+  learning_rate: 1.0e-4
+  weight_decay: 1.0e-4
+  scheduler: "cosine"
+  warmup_epochs: 5
+  seed: 42
+
+  # Loss function
+  loss: "bce_dice"      # Combined BCE + Dice loss
+  dice_weight: 0.5
+  bce_weight: 0.5
+
+# -----------------------------------------------------------------------------
+# Evaluation
+# -----------------------------------------------------------------------------
+evaluation:
+  # Threshold applied to sigmoid output to produce binary mask
+  threshold: 0.5
+  metrics: ["precision", "recall", "f1", "iou"]
+
+# -----------------------------------------------------------------------------
+# Output
+# -----------------------------------------------------------------------------
+output:
+  checkpoint_dir: "checkpoints"
+  results_dir: "results"
+  plots_dir: "results/plots"
+  logs_dir: "results/logs"
+  predictions_dir: "results/predictions"
+
+  # Save best model checkpoint based on this metric
+  best_metric: "f1"
+
+  # How often to save sample predictions (every N epochs)
+  save_predictions_every: 5
+
+# -----------------------------------------------------------------------------
+# Reproducibility
+# -----------------------------------------------------------------------------
+seed: 42
